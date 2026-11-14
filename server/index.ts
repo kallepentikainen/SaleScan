@@ -9,7 +9,9 @@ try {
   /* no .env file: rely on the real environment */
 }
 
-const { aiAvailable, analyzeWithClaude, liveCheckWithClaude, AiUnavailableError } = await import("./claude.ts");
+const { AiUnavailableError } = await import("./claude.ts");
+const { aiStatus, analyze, liveCheck } = await import("./ai.ts");
+const { ApiError: GeminiApiError } = await import("@google/genai");
 const { heuristicAnalysis } = await import("../shared/redFlags.ts");
 const { parseAnalyzeRequest, parseLiveRequest } = await import("./validate.ts");
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
@@ -47,7 +49,8 @@ function rateLimit(max: number, windowMs: number) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, ai: aiAvailable().ok });
+  const s = aiStatus();
+  res.json({ ok: true, ai: s.ok, provider: s.provider });
 });
 
 app.post("/api/analyze", rateLimit(20, 10 * 60_000), async (req, res) => {
@@ -63,7 +66,7 @@ app.post("/api/analyze", rateLimit(20, 10 * 60_000), async (req, res) => {
     if (parsed.transcript.length === 0) {
       return res.json(heuristicAnalysis(parsed));
     }
-    const analysis = await analyzeWithClaude(parsed, controller.signal);
+    const analysis = await analyze(parsed, controller.signal);
     res.json(analysis);
   } catch (err) {
     console.warn("[analyze] falling back to heuristic:", describe(err));
@@ -76,7 +79,7 @@ app.post("/api/live-check", rateLimit(60, 10 * 60_000), async (req, res) => {
   const parsed = parseLiveRequest(req.body);
   if (!parsed) return res.status(400).json({ error: "invalid_request" });
   try {
-    res.json({ alerts: await liveCheckWithClaude(parsed) });
+    res.json({ alerts: await liveCheck(parsed) });
   } catch (err) {
     console.warn("[live-check] skipped:", describe(err));
     // Live checks are best effort; the client keeps its on-device detection.
@@ -86,6 +89,7 @@ app.post("/api/live-check", rateLimit(60, 10 * 60_000), async (req, res) => {
 
 function describe(err: unknown): string {
   if (err instanceof AiUnavailableError) return err.message;
+  if (err instanceof GeminiApiError) return `Gemini API error ${err.status}: ${err.message.slice(0, 300)}`;
   if (err instanceof Anthropic.AuthenticationError) return "invalid Anthropic credentials";
   if (err instanceof Anthropic.RateLimitError) return "Anthropic rate limit";
   if (err instanceof Anthropic.APIConnectionTimeoutError) return "Anthropic request timed out";
@@ -105,7 +109,7 @@ if (fs.existsSync(dist)) {
 
 const port = Number(process.env.PORT) || 8787;
 app.listen(port, () => {
-  const ai = aiAvailable();
+  const ai = aiStatus();
   console.log(`SaleScan API on http://localhost:${port}`);
-  console.log(ai.ok ? "Claude analysis enabled" : `Claude analysis disabled (${ai.reason}); using heuristics`);
+  console.log(ai.ok ? `AI analysis: ${ai.provider}` : "No AI key (GEMINI_API_KEY / ANTHROPIC_API_KEY): on-device heuristics only");
 });

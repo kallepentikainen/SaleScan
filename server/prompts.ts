@@ -69,7 +69,7 @@ ${lines || "(empty: nothing was transcribed)"}
 }
 
 export function liveUserMessage(req: LiveCheckRequest): string {
-  return `Write the tip in ${LANG_NAME[req.lang]}.
+  return `Write the tactic (a short, human-readable name such as "False urgency") and the tip in ${LANG_NAME[req.lang]}.
 Already alerted: ${req.alreadyAlerted.length ? req.alreadyAlerted.join("; ") : "none"}.
 
 <buyer_context>
