@@ -6,7 +6,7 @@ import type { Strings } from "../i18n.ts";
 import { isGlasses, listInputs, micErrorFrom, openMic, stopStream } from "../lib/audio.ts";
 import { Transcriber, type SpeechErrorKind } from "../lib/speech.ts";
 import { cue, speak, stopSpeaking, vibrate } from "../lib/voice.ts";
-import { disableGlassesTap, enableGlassesTap, keepAwake } from "../lib/device.ts";
+import { IS_IOS, disableGlassesTap, enableGlassesTap, keepAwake } from "../lib/device.ts";
 import { liveCheck } from "../lib/api.ts";
 import { DEMOS } from "../lib/demo.ts";
 
@@ -155,6 +155,16 @@ export function Session({ t, settings, context, onEnd }: Props) {
       setBanner({ text: map[kind], tone: fatal ? "error" : "warn" });
     };
 
+    const recEvents = () => ({
+      onFinal: addFinal,
+      onInterim: (txt: string) => !speakingRef.current && setInterim(txt),
+      onError: speechError,
+      onListening: (l: boolean) => {
+        setListening(l);
+        if (l) setBanner((b) => (b?.tone === "warn" && b.text === tt().netSpeech ? null : b));
+      },
+    });
+
     async function boot() {
       await keepAwake(true);
       const tapOk = await enableGlassesTap(addMark, "SaleScan");
@@ -166,6 +176,15 @@ export function Session({ t, settings, context, onEnd }: Props) {
 
       if (settings.demo) {
         setListening(true);
+        return;
+      }
+
+      if (IS_IOS) {
+        // Let Safari's recognizer own the mic. iOS routes it to the Bluetooth
+        // glasses automatically while they're connected.
+        const rec = new Transcriber(settings.lang, recEvents(), null, false);
+        recRef.current = rec;
+        rec.start();
         return;
       }
 
@@ -187,20 +206,7 @@ export function Session({ t, settings, context, onEnd }: Props) {
       streamRef.current = stream;
       watchTrack(stream);
 
-      const rec = new Transcriber(
-        settings.lang,
-        {
-          onFinal: addFinal,
-          onInterim: (txt) => !speakingRef.current && setInterim(txt),
-          onError: speechError,
-          onListening: (l) => {
-            setListening(l);
-            if (l) setBanner((b) => (b?.tone === "warn" && b.text === tt().netSpeech ? null : b));
-          },
-        },
-        stream.getAudioTracks()[0] ?? null,
-        settings.localSpeech,
-      );
+      const rec = new Transcriber(settings.lang, recEvents(), stream.getAudioTracks()[0] ?? null, settings.localSpeech);
       recRef.current = rec;
       rec.start();
     }

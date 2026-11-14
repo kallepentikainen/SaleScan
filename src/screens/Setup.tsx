@@ -5,6 +5,7 @@ import { isGlasses, listInputs, micErrorFrom, openMic, pickPreferred, stopStream
 import { installLocalModel, localModelState, speechSupported, type LocalModelState } from "../lib/speech.ts";
 import { speak, unlockAudio } from "../lib/voice.ts";
 import { health } from "../lib/api.ts";
+import { IS_IOS } from "../lib/device.ts";
 
 interface Props {
   t: Strings;
@@ -132,6 +133,7 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
               <span className="dot" aria-hidden="true" />
               {settings.glasses ? t.glassesFound : t.glassesNotFound}
             </p>
+            {IS_IOS && !settings.glasses && <p className="hint">{t.iosHint}</p>}
             {devices.length > 1 && (
               <label className="field">
                 <span>{t.input}</span>

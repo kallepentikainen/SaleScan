@@ -8,6 +8,14 @@
  * the phone.
  */
 
+/**
+ * iPhone/iPad: every iOS browser uses WebKit. There, our own getUserMedia
+ * stream and SpeechRecognition can fight over the microphone, and a looping
+ * <audio> element can change the audio session, so iOS uses a simpler path.
+ */
+export const IS_IOS =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 let silentEl: HTMLAudioElement | null = null;
 
 function silentWavUrl(seconds = 2, rate = 8000): string {
@@ -33,7 +41,7 @@ function silentWavUrl(seconds = 2, rate = 8000): string {
 
 /** Must be called from a user gesture. Returns false if unsupported. */
 export async function enableGlassesTap(onTap: () => void, title: string): Promise<boolean> {
-  if (!("mediaSession" in navigator)) return false;
+  if (IS_IOS || !("mediaSession" in navigator)) return false;
   try {
     silentEl ??= Object.assign(new Audio(silentWavUrl()), { loop: true });
     silentEl.volume = 0.01;
