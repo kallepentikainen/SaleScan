@@ -1,0 +1,32 @@
+{
+  "name": "salescan",
+  "private": true,
+  "version": "0.1.0",
+  "description": "An honest second opinion in face-to-face sales, delivered through Ray-Ban Meta glasses.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"vite\" \"tsx watch server/index.ts\"",
+    "dev:https": "concurrently -n web,api -c cyan,magenta \"vite --mode https\" \"tsx watch server/index.ts\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "express": "^4.21.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
