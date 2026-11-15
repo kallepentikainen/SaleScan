@@ -23,16 +23,31 @@ Ray-Ban Meta Gen 2 ──Bluetooth mic──▶ Phone (mobile web app)
                                          ▼
                                 Node server ──▶ Google Gemini (default, free tier)
                                  │              or Anthropic Claude
-                                 · /api/live-check   every ~25 s, minimal thinking
+                                 · /api/live-check   every ~10 s, minimal thinking
                                  · /api/analyze      final verdict, structured JSON
 ```
 
 1. **Setup:** checks microphone permission, detects the paired glasses by device label, shows a live level meter, tests the glasses speaker, and reports whether on-device speech recognition and the AI service are available.
 2. **Prepare and consent:** optional context (what's sold, price, budget). The buyer confirms they'll tell the seller an AI assistant is listening, and can have the glasses announce it.
-3. **Live:** a continuous transcript. Each new line runs through on-device pattern detection in English and Finnish: urgency, scarcity, pressure to sign, discouraging outside advice, risky payments, guaranteed returns, brushing off the contract, lock-in, fake social proof and "free" hooks. An alert plays a two-tone earcon, can whisper a short tip, vibrates the phone and flashes the screen. Every ~25 s, new text also goes to the AI for subtler tactics.
+3. **Live:** a continuous transcript. Each new line runs through on-device pattern detection in English and Finnish: urgency, scarcity, pressure to sign, discouraging outside advice, risky payments, guaranteed returns, brushing off the contract, lock-in, fake social proof and "free" hooks. An alert plays a two-tone earcon, can whisper a short tip, vibrates the phone and flashes the screen. Every ~10 s, new text also goes to the AI for subtler tactics.
    - **Glasses tap** (Media Session play/pause) = "flag this moment".
    - Say **"SaleScan, stop"** / **"SaleScan, lopeta"** to end hands-free.
 4. **Verdict:** the AI returns a structured analysis: go / caution / walk away, deal quality, manipulation risk, red flags with quotes, claims to verify, questions to ask, next steps and consumer-rights notes (e.g. the EU 14-day withdrawal right for off-premises sales). The short summary is read aloud through the glasses.
+
+## Two-phone mode (recommended for real conversations)
+
+In testing we found that the glasses' Bluetooth microphone is tuned to the wearer's own voice: it filters out the seller unless they speak very loudly. iPhone Safari also can't take input from the phone mic while sending output to the glasses. So SaleScan can split the job across two phones on the same server. Each phone picks a **role** on the first screen:
+
+| Role | Device | What it does |
+|---|---|---|
+| **Solo** | one phone | Everything on one device (original mode). |
+| **Listener** | phone *not* paired with the glasses, held or placed near the conversation | Uses its own mic, transcribes, detects red flags and runs the AI analysis. Stays silent. |
+| **Earpiece** | phone paired with the glasses | Never opens the mic, so the glasses stay in media mode and play the earcons, whispered tips and the spoken verdict sent by the listener. |
+| **Presenter** | laptop / projector | Big live view of the transcript, alerts and verdict, for showing the demo on stage. Sound off by default. |
+
+The devices talk through a small relay on the server (`server/relay.ts`): the listener POSTs events and the others receive them over Server-Sent Events. A device that joins late or reconnects gets a snapshot of the current session, so nothing is missed after a network drop.
+
+Quick start for a demo: start the server, open the app on all devices, choose **Listener** on the friend's phone, **Earpiece** on the glasses phone and **Presenter** on the laptop, then start the session on the listener.
 
 ## Robustness (challenge requirements)
 
@@ -40,6 +55,7 @@ Ray-Ban Meta Gen 2 ──Bluetooth mic──▶ Phone (mobile web app)
 |---|---|
 | Permissions | Explicit mic check with specific messages for denied, insecure context (needs HTTPS), no device and device busy. |
 | Device state | Watches `devicechange` and the track's `ended` event. If the glasses disconnect, it falls back to the phone mic mid-session and switches back when they reconnect, telling the user each time. |
+| Speech on iPhone | iOS Safari can keep long speech "unfinished" for minutes. SaleScan keeps that text when recognition restarts or the session ends, and runs red-flag checks on it while it is still being recognised, so long conversations are analysed in full. |
 | Connectivity | On-device detection works offline. The final analysis falls back to an on-device verdict when offline and re-runs automatically when the connection returns. Speech recognition restarts with backoff. |
 | Errors | Server failures, timeouts, model refusals and invalid output all degrade to the heuristic verdict, never to a blank screen. On Gemini, an overloaded model (503/429) falls through to the next model in `GEMINI_MODELS`. |
 | Performance | Audio only (no camera) to save battery. Screen Wake Lock keeps recognition alive. Live checks are throttled and use low effort. On-device STT when Chrome supports it. |
@@ -48,7 +64,7 @@ Ray-Ban Meta Gen 2 ──Bluetooth mic──▶ Phone (mobile web app)
 
 ## Run it
 
-Requirements: Node.js 20+ and, for live speech, **Chrome on Android** (Web Speech API). Pair the Ray-Ban Meta glasses with the phone over Bluetooth first.
+Requirements: Node.js 20+ and a browser with the Web Speech API: **Safari on iPhone** (turn on Settings → General → Keyboard → Enable Dictation) or **Chrome on Android**. Pair the Ray-Ban Meta glasses with the phone over Bluetooth first. On iPhone, if Safari says microphone access is blocked: tap **aA** in the address bar → Website Settings → Microphone → Allow.
 
 ```bash
 npm install
@@ -75,15 +91,23 @@ npm run build && npm start    # serves dist/ + API on :8787
 ```
 shared/      types + on-device red-flag detector (used by browser and server)
 server/      Express API, provider switch (ai.ts → gemini.ts | claude.ts),
-             shared prompts + output schema, input/output validation
+             shared prompts + output schema, input/output validation,
+             relay.ts (two-phone event relay over SSE)
 src/lib/     mic & glasses detection, speech recognition, TTS & earcons,
-             glasses tap (Media Session), wake lock, API client, demo scripts
-src/screens/ Setup → Prepare (context + consent) → Session (live) → Result
+             glasses tap (Media Session), wake lock, API client, relay client,
+             demo scripts
+src/screens/ Setup (role) → Prepare (context + consent) → Session (live) → Result
+             Monitor: the earpiece / presenter view in two-phone mode
 ```
+
+## Status
+
+A working hackathon prototype. Tested end to end with two iPhones and Ray-Ban Meta Gen 2 glasses: the listener phone transcribes the conversation, the earpiece phone plays tips and the verdict through the glasses. The fix for long iPhone conversations was the last change made and still needs a full real-world retest.
 
 ## Limitations and next steps
 
 - Ray-Ban Meta Gen 2 has no display, so this is deliberately an audio-first design. A Ray-Ban Display version could show the alert card in-lens.
 - Web apps can't use the glasses camera. A Device Access Toolkit mobile integration could read price tags and contracts from the first-person view.
+- The glasses mic favours the wearer's voice, which is why two-phone mode exists. A Device Access Toolkit integration could get better access to the glasses' microphone array and make a single device enough.
 - Speaker diarization isn't available in the Web Speech API, so the model infers who is the seller from content.
 - Pilot path: consumer organisations (e.g. Kilpailu- ja kuluttajavirasto in Finland) and elderly-care services, for whom door-to-door sales fraud is a recurring issue.
