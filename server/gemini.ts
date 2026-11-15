@@ -81,7 +81,8 @@ export async function analyzeWithGemini(req: AnalyzeRequest, signal?: AbortSigna
     user: analysisUserMessage(req),
     schema: ANALYSIS_SCHEMA,
     thinking: "medium",
-    timeoutMs: 60_000,
+    // Two models x 45 s stays inside the phone's 100 s wait.
+    timeoutMs: 45_000,
     signal,
   });
   return normalizeAnalysis(raw);

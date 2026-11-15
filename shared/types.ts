@@ -59,6 +59,46 @@ export interface LiveCheckRequest {
   alreadyAlerted: string[];
 }
 
+/* ---- Two-device relay: listener phone → server → earpiece / presenter ---- */
+
+export interface RelayAlert {
+  key: string;
+  tactic: string;
+  tip: string;
+  quote: string;
+  severity: Severity;
+  t: number;
+  source: "local" | "ai";
+}
+
+export interface RelayResult {
+  analysis: Analysis;
+  provisional: boolean;
+  reason?: "offline" | "error";
+}
+
+export type RelayEvent =
+  | { type: "start"; lang: Lang; context: SessionContext }
+  | { type: "segment"; seg: TranscriptSegment }
+  | { type: "interim"; text: string }
+  | { type: "alert"; alert: RelayAlert; speak: boolean }
+  | { type: "mark"; t: number }
+  | { type: "say"; text: string; lang: Lang }
+  | { type: "ended" }
+  | ({ type: "analysis" } & RelayResult)
+  | { type: "reset" };
+
+export interface RelaySnapshot {
+  active: boolean;
+  ended: boolean;
+  lang: Lang;
+  context: SessionContext | null;
+  segments: TranscriptSegment[];
+  alerts: RelayAlert[];
+  marks: number[];
+  result: RelayResult | null;
+}
+
 export interface LiveAlert {
   tactic: string;
   quote: string;

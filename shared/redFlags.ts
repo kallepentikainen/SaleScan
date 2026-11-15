@@ -28,8 +28,8 @@ export const PATTERNS: Pattern[] = [
       fi: "Vain myyntipuheessa olevat takarajat saavat ohittamaan vertailun ja harkinnan.",
     },
     re: [
-      /\b(today only|only (for )?today|offer ends|expires (today|tonight)|last chance|limited[- ]time|before (it'?s|they'?re) gone|price goes up tomorrow|only valid (now|today))\b/i,
-      /(vain tänään|ainoastaan tänään|tarjous päättyy|viimeinen mahdollisuus|rajoitetun ajan|huomenna hinta nousee|voimassa vain tänään|tänään on viimeinen)/i,
+      /\b(today only|only (for )?today|offer ends|expires (today|tonight|soon)|last chance|limited[- ]time|before (it'?s|they'?re) gone|price goes up( tomorrow)?|only valid (now|today)|one[- ]time (offer|deal)|(it|this|the offer|the deal) (goes|will go) away|won'?t be (available|here) (tomorrow|later)|now or never)\b/i,
+      /(vain tänään|ainoastaan tänään|tarjous päättyy|viimeinen mahdollisuus|rajoitetun ajan|huomenna hinta nousee|voimassa vain tänään|tänään on viimeinen|kertaluontoinen tarjous|ainutkertainen tarjous|nyt tai ei koskaan)/i,
     ],
   },
   {
@@ -58,8 +58,8 @@ export const PATTERNS: Pattern[] = [
       fi: "Reilu tarjous kestää yön yli miettimisen. Allekirjoituksen vaatiminen paikan päällä on klassinen painostuskeino.",
     },
     re: [
-      /\b(sign (it |this )?(now|here|today)|decide (right )?now|need (an|your) answer (now|today)|can'?t hold (this|the) (price|offer)|just sign)\b/i,
-      /(allekirjoita (nyt|tähän|heti)|päätös pitää tehdä (nyt|heti|tänään)|tarvitsen vastauksen (nyt|tänään)|en voi pitää (hintaa|tarjousta)|laita vaan nimi)/i,
+      /\b(sign (it |this )?(now|here|today)|decide (right )?now|need (an|your) answer (now|today)|can'?t hold (this|the) (price|offer)|just sign|if you don'?t sign( it)?( now| today)?|have to sign (now|today))\b/i,
+      /(allekirjoita (nyt|tähän|heti)|päätös pitää tehdä (nyt|heti|tänään)|tarvitsen vastauksen (nyt|tänään)|en voi pitää (hintaa|tarjousta)|laita vaan nimi|jos et allekirjoita)/i,
     ],
   },
   {
@@ -88,8 +88,8 @@ export const PATTERNS: Pattern[] = [
       fi: "Lahjakortit, krypto, pelkkä käteinen, ennakkomaksut ja pankkitunnusten kysely ovat huijausten tunnusmerkkejä, eikä rahoja saa takaisin.",
     },
     re: [
-      /\b(gift ?cards?|wire transfer|crypto(currency)?|bitcoin|cash only|western union|pay (it )?up ?front|deposit (now|today)|your (bank|online banking) (details|codes|password)|pin code)\b/i,
-      /(lahjakort|vain käteinen|käteisellä heti|kryptovaluut|bitcoin|maksa etukäteen|ennakkomaksu (nyt|tänään)|pankkitunnu|tunnusluvu|verkkopankkitunnu)/i,
+      /\b(gift ?cards?|wire transfer|crypto(currency)?|bitcoin|cash only|(in|by|with) cash|pay (me )?cash|western union|pay (it )?up ?front|deposit (now|today)|your (bank|online banking) (details|codes|password)|pin code|social security( number)?|ssn|card (number|details) (now|right now)|personal (id|identity) (number|code))\b/i,
+      /(lahjakort|vain käteinen|käteisellä|kryptovaluut|bitcoin|maksa etukäteen|ennakkomaksu (nyt|tänään)|pankkitunnu|tunnusluvu|verkkopankkitunnu|henkilötunnu|sosiaaliturvatunnu|korttinumero)/i,
     ],
   },
   {
@@ -229,6 +229,9 @@ const T = {
     rights:
       "In the EU, contracts made away from business premises (door-to-door, street, home visits) usually come with a 14-day withdrawal right. Check the terms.",
     notice: "AI analysis unavailable. This is an on-device preliminary check based on known pressure tactics.",
+    unheardHeadline: "I couldn't hear enough",
+    unheardSpoken: "I couldn't hear the conversation well enough to judge it. Don't sign anything yet.",
+    unheardNotice: "Almost nothing was transcribed. Check that the listening phone's microphone works and that Dictation is on, then try again.",
   },
   fi: {
     go: "Vaikuttaa asialliselta, mutta tarkista",
@@ -253,6 +256,9 @@ const T = {
     rights:
       "EU:ssa liiketilojen ulkopuolella tehdyissä sopimuksissa (kotimyynti, katumyynti) on yleensä 14 päivän peruutusoikeus. Tarkista ehdot.",
     notice: "Tekoälyanalyysi ei ole saatavilla. Tämä on laitteella tehty alustava tarkistus tunnettujen painostuskeinojen perusteella.",
+    unheardHeadline: "En kuullut tarpeeksi",
+    unheardSpoken: "En kuullut keskustelua tarpeeksi hyvin arvioidakseni sitä. Älä allekirjoita vielä mitään.",
+    unheardNotice: "Keskustelusta tunnistettiin tuskin mitään. Tarkista, että kuuntelevan puhelimen mikrofoni toimii ja sanelu on päällä, ja yritä uudelleen.",
   },
 };
 
@@ -274,6 +280,26 @@ export function heuristicAnalysis(req: AnalyzeRequest): Analysis {
 
   const words = fullText.split(/\s+/).filter(Boolean).length;
   const tooShort = words < 40;
+
+  // Never call a deal fine when we barely heard anything.
+  if (words < 12 && hits.length === 0) {
+    return {
+      verdict: "caution",
+      headline: t.unheardHeadline,
+      spoken_summary: t.unheardSpoken,
+      deal_score: 50,
+      scam_risk: 0,
+      confidence: "low",
+      red_flags: [],
+      green_flags: [],
+      claims_to_verify: [],
+      questions_to_ask: t.q,
+      next_steps: t.steps,
+      consumer_rights_note: "",
+      source: "heuristic",
+      notice: t.unheardNotice,
+    };
+  }
 
   const red_flags: RedFlag[] = hits.map((h) => ({
     tactic: h.label,

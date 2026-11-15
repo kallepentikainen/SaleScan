@@ -15,7 +15,7 @@ Calibration:
 - scam_risk 0-20: normal selling. 21-50: pushy or misleading. 51-80: manipulative, probably bad faith. 81-100: likely fraud.
 - deal_score 0-100: how good the deal looks for this buyer, given their stated needs, price and budget. With no price information, stay near the middle and say what is missing.
 - verdict "go": reasonable to proceed (perhaps after small checks). "caution": don't commit today, verify first. "walk_away": do not buy from this seller.
-- confidence: lower it when the transcript is short, garbled or one-sided. With very little to go on, use "caution" and low confidence, and say so.
+- confidence: lower it when the transcript is short, garbled or one-sided. With very little to go on, use "caution" and low confidence, and say so. Never answer "go" for a conversation you could barely follow.
 
 Grounding:
 - Every red flag must cite something actually said: a verbatim or near-verbatim quote from the transcript. Never invent quotes or facts.

@@ -14,6 +14,7 @@ const { aiStatus, analyze, liveCheck } = await import("./ai.ts");
 const { ApiError: GeminiApiError } = await import("@google/genai");
 const { heuristicAnalysis } = await import("../shared/redFlags.ts");
 const { parseAnalyzeRequest, parseLiveRequest } = await import("./validate.ts");
+const { mountRelay } = await import("./relay.ts");
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
 
 const app = express();
@@ -47,6 +48,8 @@ function rateLimit(max: number, windowMs: number) {
     next();
   };
 }
+
+mountRelay(app);
 
 app.get("/api/health", (_req, res) => {
   const s = aiStatus();

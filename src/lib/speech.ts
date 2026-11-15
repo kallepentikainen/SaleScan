@@ -61,6 +61,9 @@ export class Transcriber {
   private restarts = 0;
   private restartTimer: number | undefined;
   private paused = false;
+  /** Latest not-yet-final text. iOS Safari can keep long speech "interim" for
+   *  minutes, so it must not be lost when recognition ends or is stopped. */
+  private pending = "";
 
   constructor(
     private lang: Lang,
@@ -79,9 +82,17 @@ export class Transcriber {
     this.spawn(C);
   }
 
-  stop() {
+  /** Stops listening and returns any speech that was heard but never finalised. */
+  stop(): string {
     this.wanted = false;
     window.clearTimeout(this.restartTimer);
+    const tail = this.pending;
+    this.pending = "";
+    if (this.rec) {
+      // Detach first: a late final for the same words would duplicate the tail.
+      this.rec.onresult = null;
+      this.rec.onend = null;
+    }
     try {
       this.rec?.stop();
     } catch {
@@ -89,6 +100,7 @@ export class Transcriber {
     }
     this.rec = null;
     this.events.onListening(false);
+    return tail;
   }
 
   /** Ignore results while SaleScan itself is speaking through the glasses. */
@@ -121,7 +133,10 @@ export class Transcriber {
     };
     rec.onresult = (e: AnyRec) => {
       this.restarts = 0;
-      if (this.paused) return;
+      if (this.paused) {
+        this.pending = "";
+        return;
+      }
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
@@ -130,7 +145,8 @@ export class Transcriber {
         if (r.isFinal) this.events.onFinal(text);
         else interim += text + " ";
       }
-      this.events.onInterim(interim.trim());
+      this.pending = interim.trim();
+      this.events.onInterim(this.pending);
     };
     rec.onerror = (e: AnyRec) => {
       const code: string = e.error;
@@ -151,6 +167,12 @@ export class Transcriber {
     };
     rec.onend = () => {
       this.events.onListening(false);
+      // Recognition ended without finalising the last words: keep them.
+      if (this.pending) {
+        const tail = this.pending;
+        this.pending = "";
+        this.events.onFinal(tail);
+      }
       if (!this.wanted) return;
       // Back off if recognition keeps dying (e.g. offline with cloud STT).
       const delay = Math.min(5000, 250 * 2 ** Math.min(this.restarts, 4));

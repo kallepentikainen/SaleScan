@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Analysis, AnalyzeRequest } from "../../shared/types.ts";
+import type { Analysis, AnalyzeRequest, TranscriptSegment } from "../../shared/types.ts";
 import type { Settings } from "../App.tsx";
 import type { Strings } from "../i18n.ts";
 import { analyze, type AnalyzeOutcome } from "../lib/api.ts";
+import { publish } from "../lib/relay.ts";
 import { cue, speak, stopSpeaking, vibrate } from "../lib/voice.ts";
 
 interface Props {
@@ -14,19 +15,24 @@ interface Props {
 
 const ICON = { go: "✓", caution: "!", walk_away: "✕" } as const;
 
+/** Runs the analysis on this device, then shows (and usually speaks) it. */
 export function Result({ t, settings, request, onReset }: Props) {
   const [outcome, setOutcome] = useState<AnalyzeOutcome | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showTranscript, setShowTranscript] = useState(false);
   const spokenFor = useRef<string>("");
+  const relay = settings.role === "listener";
 
   const run = useCallback(async () => {
     setLoading(true);
     const res = await analyze(request);
     // Never replace a full AI result with a weaker on-device one.
-    setOutcome((prev) => (prev && !prev.provisional && res.provisional ? prev : res));
+    setOutcome((prev) => {
+      const next = prev && !prev.provisional && res.provisional ? prev : res;
+      if (relay && next === res) publish({ type: "analysis", ...res });
+      return next;
+    });
     setLoading(false);
-  }, [request]);
+  }, [request, relay]);
 
   useEffect(() => {
     void run();
@@ -41,29 +47,65 @@ export function Result({ t, settings, request, onReset }: Props) {
     return () => window.removeEventListener("online", on);
   }, [outcome, run]);
 
-  const a: Analysis | undefined = outcome?.analysis;
+  const a = outcome?.analysis;
 
   // Speak the verdict once per distinct result (e.g. heuristic first, then AI).
+  // A listener phone stays silent: the earpiece phone speaks instead.
   useEffect(() => {
-    if (!a || !settings.tts) return;
+    if (!a || !settings.tts || relay) return;
     const key = `${a.source}:${a.verdict}:${a.spoken_summary}`;
     if (spokenFor.current === key) return;
     spokenFor.current = key;
     cue("ready");
     vibrate(a.verdict === "walk_away" ? [200, 100, 200] : 120);
     window.setTimeout(() => void speak(a.spoken_summary, settings.lang, settings.rate), 450);
-  }, [a, settings.tts, settings.lang, settings.rate]);
+  }, [a, settings.tts, settings.lang, settings.rate, relay]);
 
-  if (loading && !a) {
-    return (
-      <section className="stack center" aria-busy="true">
-        <div className="spinner" aria-hidden="true" />
-        <h2 tabIndex={-1}>{t.analyzing}</h2>
-        <p className="muted">{t.analyzingSub}</p>
-      </section>
-    );
-  }
-  if (!a) return null;
+  if (loading && !a) return <Analyzing t={t} />;
+  if (!a || !outcome) return null;
+
+  return (
+    <ResultView
+      t={t}
+      analysis={a}
+      provisional={outcome.provisional}
+      offline={outcome.reason === "offline"}
+      loading={loading}
+      transcript={request.transcript}
+      onRetry={() => void run()}
+      onReadAgain={relay ? undefined : () => void speak(a.spoken_summary, settings.lang, settings.rate)}
+      onReset={() => {
+        stopSpeaking();
+        onReset();
+      }}
+    />
+  );
+}
+
+export function Analyzing({ t }: { t: Strings }) {
+  return (
+    <section className="stack center" aria-busy="true">
+      <div className="spinner" aria-hidden="true" />
+      <h2 tabIndex={-1}>{t.analyzing}</h2>
+      <p className="muted">{t.analyzingSub}</p>
+    </section>
+  );
+}
+
+interface ViewProps {
+  t: Strings;
+  analysis: Analysis;
+  provisional: boolean;
+  offline: boolean;
+  loading?: boolean;
+  transcript?: TranscriptSegment[];
+  onRetry?: () => void;
+  onReadAgain?: () => void;
+  onReset?: () => void;
+}
+
+export function ResultView({ t, analysis: a, provisional, offline, loading, transcript, onRetry, onReadAgain, onReset }: ViewProps) {
+  const [showTranscript, setShowTranscript] = useState(false);
 
   const list = (title: string, items: string[], cls = "") =>
     items.length > 0 && (
@@ -78,7 +120,7 @@ export function Result({ t, settings, request, onReset }: Props) {
     );
 
   return (
-    <section className="stack">
+    <section className="stack result">
       <div className={`verdict v-${a.verdict}`} role="status" aria-live="polite">
         <div className="v-icon" aria-hidden="true">
           {ICON[a.verdict]}
@@ -91,12 +133,14 @@ export function Result({ t, settings, request, onReset }: Props) {
 
       <p className="summary">{a.spoken_summary}</p>
 
-      {outcome?.provisional && (
+      {provisional && (
         <div className="banner warn stack-sm">
-          <span>{outcome.reason === "offline" ? t.provisionalOffline : a.notice ?? t.provisional}</span>
-          <button className="btn small" onClick={() => void run()} disabled={loading}>
-            {loading ? t.checking : t.retry}
-          </button>
+          <span>{offline ? t.provisionalOffline : a.notice ?? t.provisional}</span>
+          {onRetry && (
+            <button className="btn small" onClick={onRetry} disabled={loading}>
+              {loading ? t.checking : t.retry}
+            </button>
+          )}
         </div>
       )}
 
@@ -137,32 +181,34 @@ export function Result({ t, settings, request, onReset }: Props) {
         </div>
       )}
 
-      <button className="btn" onClick={() => void speak(a.spoken_summary, settings.lang, settings.rate)}>
-        🔊 {t.readAgain}
-      </button>
-
-      <button className="btn ghost" aria-expanded={showTranscript} onClick={() => setShowTranscript((v) => !v)}>
-        {t.showTranscript}
-      </button>
-      {showTranscript && (
-        <div className="card transcript">
-          <div className="lines">
-            {request.transcript.map((s) => (
-              <p key={s.id}>{s.text}</p>
-            ))}
-          </div>
-        </div>
+      {onReadAgain && (
+        <button className="btn" onClick={onReadAgain}>
+          🔊 {t.readAgain}
+        </button>
       )}
 
-      <button
-        className="btn danger"
-        onClick={() => {
-          stopSpeaking();
-          onReset();
-        }}
-      >
-        🗑 {t.deleteNew}
-      </button>
+      {transcript && (
+        <>
+          <button className="btn ghost" aria-expanded={showTranscript} onClick={() => setShowTranscript((v) => !v)}>
+            {t.showTranscript}
+          </button>
+          {showTranscript && (
+            <div className="card transcript">
+              <div className="lines">
+                {transcript.map((s) => (
+                  <p key={s.id}>{s.text}</p>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {onReset && (
+        <button className="btn danger" onClick={onReset}>
+          🗑 {t.deleteNew}
+        </button>
+      )}
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnalyzeRequest, SessionContext, Severity, TranscriptSegment } from "../../shared/types.ts";
+import type { AnalyzeRequest, RelayAlert, SessionContext, TranscriptSegment } from "../../shared/types.ts";
+import { publish, publishInterim } from "../lib/relay.ts";
 import { detectFlags } from "../../shared/redFlags.ts";
 import type { Settings } from "../App.tsx";
 import type { Strings } from "../i18n.ts";
@@ -17,20 +18,15 @@ interface Props {
   onEnd: (req: AnalyzeRequest) => void;
 }
 
-interface UiAlert {
-  key: string;
-  tactic: string;
-  tip: string;
-  quote: string;
-  severity: Severity;
-  t: number;
-  source: "local" | "ai";
-}
+type UiAlert = RelayAlert;
 
 type Banner = { text: string; tone: "warn" | "error" | "info" } | null;
 
-const LIVE_CHECK_EVERY_MS = 25_000;
-const LIVE_CHECK_MIN_NEW_CHARS = 160;
+// Frequent enough that the AI catches tactics the on-device patterns miss
+// within a few seconds; still only a handful of free-tier requests a minute.
+const LIVE_CHECK_EVERY_MS = 10_000;
+const LIVE_CHECK_MIN_NEW_CHARS = 60;
+const END_COMMAND_STRIP = /sales?s?scan.{0,20}(stop|end|done|finish|lopeta|valmis|loppu).*$/i;
 const END_COMMAND = /\bsales?\s?scan\b.{0,20}\b(stop|end|done|finish|lopeta|valmis|loppu)\b/i;
 
 export function Session({ t, settings, context, onEnd }: Props) {
@@ -52,6 +48,8 @@ export function Session({ t, settings, context, onEnd }: Props) {
   const alertLabelsRef = useRef<string[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const recRef = useRef<Transcriber | null>(null);
+  const interimRef = useRef("");
+  const interimCheckedRef = useRef(0);
   const onFallbackMicRef = useRef(false);
   const lastCheckedLenRef = useRef(0);
   const speakingRef = useRef(false);
@@ -62,16 +60,24 @@ export function Session({ t, settings, context, onEnd }: Props) {
 
   const now = () => (Date.now() - startRef.current) / 1000;
 
+  // Listener mode: this phone sits near the seller, so it stays silent and
+  // sends everything to the earpiece phone (paired with the glasses).
+  const relay = settings.role === "listener";
+
   /** Speak through the glasses without transcribing our own voice. */
   const say = useCallback(
     async (text: string) => {
+      if (relay) {
+        publish({ type: "say", text, lang: settings.lang });
+        return;
+      }
       speakingRef.current = true;
       recRef.current?.setPaused(true);
       await speak(text, settings.lang, settings.rate);
       speakingRef.current = false;
       recRef.current?.setPaused(false);
     },
-    [settings.lang, settings.rate],
+    [settings.lang, settings.rate, relay],
   );
 
   const raiseAlert = useCallback(
@@ -80,26 +86,41 @@ export function Session({ t, settings, context, onEnd }: Props) {
       if (alertedRef.current.has(id)) return;
       alertedRef.current.add(id);
       alertLabelsRef.current.push(a.tactic);
-      setAlerts((prev) => [{ ...a, key: `${id}-${Date.now()}`, t: now() }, ...prev]);
-      cue("alert");
-      vibrate([90, 60, 90]);
+      const alert: UiAlert = { ...a, key: `${id}-${Date.now()}`, t: Math.round(now()) };
+      setAlerts((prev) => [alert, ...prev]);
       setFlash(true);
       window.setTimeout(() => setFlash(false), 700);
-      if (settings.whisperTips && settings.tts && a.severity !== "low" && !speakingRef.current) void say(a.tip);
+      const wantsSpeech = settings.whisperTips && settings.tts && a.severity !== "low";
+      if (relay) {
+        publish({ type: "alert", alert, speak: wantsSpeech });
+        return;
+      }
+      cue("alert");
+      vibrate([90, 60, 90]);
+      if (wantsSpeech && !speakingRef.current) void say(a.tip);
     },
-    [say, settings.whisperTips, settings.tts],
+    [say, settings.whisperTips, settings.tts, relay],
   );
 
   const finish = useCallback(() => {
     if (endedRef.current) return;
+    // Keep the words still being recognised when the user ends the session.
+    const tail = (recRef.current?.stop() ?? "").replace(END_COMMAND_STRIP, "").trim();
+    if (tail && !speakingRef.current) {
+      const seg: TranscriptSegment = { id: crypto.randomUUID().slice(0, 8), t: Math.round(now()), text: tail };
+      segRef.current = [...segRef.current, seg];
+      if (relay) publish({ type: "segment", seg });
+    }
     endedRef.current = true;
-    recRef.current?.stop();
     stopSpeaking();
     stopStream(streamRef.current);
     disableGlassesTap();
     void keepAwake(false);
-    cue("end");
-    vibrate(120);
+    if (relay) publish({ type: "ended" });
+    else {
+      cue("end");
+      vibrate(120);
+    }
     onEnd({
       lang: settings.lang,
       context,
@@ -107,11 +128,13 @@ export function Session({ t, settings, context, onEnd }: Props) {
       marks: marksRef.current,
       durationSec: Math.round(now()),
     });
-  }, [context, onEnd, settings.lang]);
+  }, [context, onEnd, settings.lang, relay]);
 
   const addFinal = useCallback(
     (text: string) => {
       if (speakingRef.current || endedRef.current) return;
+      heardRef.current = true;
+      setBanner((b) => (b?.text === tRef.current.nothingHeard ? null : b));
       if (END_COMMAND.test(text)) {
         finish();
         return;
@@ -120,13 +143,16 @@ export function Session({ t, settings, context, onEnd }: Props) {
       segRef.current = [...segRef.current, seg];
       setSegments(segRef.current);
       setInterim("");
+      interimRef.current = "";
+      interimCheckedRef.current = 0;
+      if (relay) publish({ type: "segment", seg });
       // Check the new line together with the previous one, since phrases get split.
       const prev = segRef.current.at(-2)?.text ?? "";
       for (const hit of detectFlags(`${prev} ${text}`, settings.lang)) {
         raiseAlert({ tactic: hit.label, tip: hit.tip, quote: hit.quote, severity: hit.severity, source: "local" });
       }
     },
-    [finish, raiseAlert, settings.lang],
+    [finish, raiseAlert, settings.lang, relay],
   );
 
   const addMark = useCallback(() => {
@@ -134,9 +160,41 @@ export function Session({ t, settings, context, onEnd }: Props) {
     const m = Math.round(now());
     marksRef.current = [...marksRef.current, m];
     setMarks(marksRef.current);
-    cue("mark");
+    if (relay) publish({ type: "mark", t: m });
+    else cue("mark");
     vibrate(40);
-  }, []);
+  }, [relay]);
+
+  const heardRef = useRef(false);
+  useEffect(() => {
+    if (settings.demo) return;
+    const id = window.setTimeout(() => {
+      if (!heardRef.current && !endedRef.current) setBanner({ text: tRef.current.nothingHeard, tone: "warn" });
+    }, 15_000);
+    return () => window.clearTimeout(id);
+  }, [settings.demo]);
+
+  const showInterim = useCallback(
+    (txt: string) => {
+      if (txt) {
+        heardRef.current = true;
+        setBanner((b) => (b?.text === tRef.current.nothingHeard ? null : b));
+      }
+      if (speakingRef.current) return;
+      interimRef.current = txt;
+      setInterim(txt);
+      if (relay && txt) publishInterim(txt);
+      // iOS may not finalise long speech for a while, so check the live text too.
+      if (txt && txt.length - interimCheckedRef.current >= 15) {
+        interimCheckedRef.current = txt.length;
+        for (const hit of detectFlags(txt.slice(-400), settings.lang)) {
+          raiseAlert({ tactic: hit.label, tip: hit.tip, quote: hit.quote, severity: hit.severity, source: "local" });
+        }
+      }
+      if (!txt) interimCheckedRef.current = 0;
+    },
+    [relay, raiseAlert, settings.lang],
+  );
 
   // --- Microphone + transcription lifecycle -------------------------------
   useEffect(() => {
@@ -157,7 +215,7 @@ export function Session({ t, settings, context, onEnd }: Props) {
 
     const recEvents = () => ({
       onFinal: addFinal,
-      onInterim: (txt: string) => !speakingRef.current && setInterim(txt),
+      onInterim: showInterim,
       onError: speechError,
       onListening: (l: boolean) => {
         setListening(l);
@@ -167,12 +225,16 @@ export function Session({ t, settings, context, onEnd }: Props) {
 
     async function boot() {
       await keepAwake(true);
-      const tapOk = await enableGlassesTap(addMark, "SaleScan");
-      if (!cancelled) setTapEnabled(tapOk);
+      if (relay) {
+        publish({ type: "start", lang: settings.lang, context });
+      } else {
+        const tapOk = await enableGlassesTap(addMark, "SaleScan");
+        if (!cancelled) setTapEnabled(tapOk);
+      }
 
       if (settings.announce && settings.tts) await say(tt().disclosure);
       if (cancelled) return;
-      cue("start");
+      if (!relay) cue("start");
 
       if (settings.demo) {
         setListening(true);
@@ -283,7 +345,7 @@ export function Session({ t, settings, context, onEnd }: Props) {
       // Type out interim text word by word, like live recognition does.
       typer = window.setInterval(() => {
         w++;
-        setInterim(words.slice(0, w).join(" "));
+        showInterim(words.slice(0, w).join(" "));
         if (w >= words.length) {
           window.clearInterval(typer);
           addFinal(line);
@@ -316,7 +378,7 @@ export function Session({ t, settings, context, onEnd }: Props) {
     const ctrl = new AbortController();
     const check = window.setInterval(async () => {
       if (!navigator.onLine || endedRef.current) return;
-      const text = segRef.current.map((s) => s.text).join(" ");
+      const text = [...segRef.current.map((s) => s.text), interimRef.current].join(" ").trim();
       if (text.length - lastCheckedLenRef.current < LIVE_CHECK_MIN_NEW_CHARS) return;
       lastCheckedLenRef.current = text.length;
       const found = await liveCheck(

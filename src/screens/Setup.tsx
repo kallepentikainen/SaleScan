@@ -104,7 +104,14 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
     unknown: t.audioErr,
   };
 
-  const canContinue = settings.demo || (hasSpeech && mic.kind === "ok");
+  const receiver = settings.role === "earpiece" || settings.role === "presenter";
+  const canContinue = receiver || settings.demo || (hasSpeech && mic.kind === "ok");
+  const roles = [
+    { id: "solo", label: t.roleSolo, sub: t.roleSoloSub },
+    { id: "listener", label: t.roleListener, sub: t.roleListenerSub },
+    { id: "earpiece", label: t.roleEarpiece, sub: t.roleEarpieceSub },
+    { id: "presenter", label: t.rolePresenter, sub: t.rolePresenterSub },
+  ] as const;
 
   return (
     <section className="stack">
@@ -112,6 +119,26 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
         <h1 tabIndex={-1}>{t.tagline}</h1>
       </div>
 
+      <div className="card stack">
+        <h2>{t.roleTitle}</h2>
+        <div className="roles" role="radiogroup" aria-label={t.roleTitle}>
+          {roles.map((r) => (
+            <button
+              key={r.id}
+              role="radio"
+              aria-checked={settings.role === r.id}
+              className={`role ${settings.role === r.id ? "on" : ""}`}
+              onClick={() => setSettings((s) => ({ ...s, role: r.id }))}
+            >
+              <strong>{r.label}</strong>
+              <span>{r.sub}</span>
+            </button>
+          ))}
+        </div>
+        {settings.role === "listener" && <p className="banner info">{t.listenerHint}</p>}
+      </div>
+
+      {!receiver && (
       <div className="card stack">
         <h2>{t.step1}</h2>
 
@@ -129,11 +156,20 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
 
         {mic.kind === "ok" && (
           <div className="stack" aria-live="polite">
-            <p className={`status ${settings.glasses ? "good" : "warn"}`}>
-              <span className="dot" aria-hidden="true" />
-              {settings.glasses ? t.glassesFound : t.glassesNotFound}
-            </p>
-            {IS_IOS && !settings.glasses && <p className="hint">{t.iosHint}</p>}
+            {settings.role === "listener" ? (
+              <p className="status good">
+                <span className="dot" aria-hidden="true" />
+                {t.micOk}
+              </p>
+            ) : (
+              <>
+                <p className={`status ${settings.glasses ? "good" : "warn"}`}>
+                  <span className="dot" aria-hidden="true" />
+                  {settings.glasses ? t.glassesFound : t.glassesNotFound}
+                </p>
+                {IS_IOS && !settings.glasses && <p className="hint">{t.iosHint}</p>}
+              </>
+            )}
             {devices.length > 1 && (
               <label className="field">
                 <span>{t.input}</span>
@@ -180,7 +216,9 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
           </div>
         </dl>
       </div>
+      )}
 
+      {!receiver && (
       <label className="toggle">
         <input
           type="checkbox"
@@ -189,6 +227,7 @@ export function Setup({ t, settings, setSettings, onContinue }: Props) {
         />
         <span>{t.demo}</span>
       </label>
+      )}
 
       <button
         className="btn primary big"
